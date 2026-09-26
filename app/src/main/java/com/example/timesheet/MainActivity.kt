@@ -68,12 +68,14 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.timesheet.data.AppViewModel
 import com.example.timesheet.data.Employee
+import com.example.timesheet.data.EmployeeOrgLink
 import com.example.timesheet.data.EntryType
 import com.example.timesheet.data.ExpenseCategory
 import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.moneyInputFilter
 import com.example.timesheet.data.Organization
 import com.example.timesheet.data.PayrollCalculator
+import com.example.timesheet.data.Project
 import com.example.timesheet.data.Surcharge
 import com.example.timesheet.data.Tax
 import com.example.timesheet.data.TimeType
@@ -85,6 +87,9 @@ import com.example.timesheet.ui.AdjustmentEntryDialog
 import com.example.timesheet.ui.AmountEntryDialog
 import com.example.timesheet.ui.AppTopBar
 import com.example.timesheet.ui.BackupsScreen
+import com.example.timesheet.ui.ContactPick
+import com.example.timesheet.ui.EmployeeOrgRateDialog
+import com.example.timesheet.ui.EmployeeOrgRateDialogState
 import com.example.timesheet.ui.ExpenseCategoriesScreen
 import com.example.timesheet.ui.ExpenseCategoryEditDialog
 import com.example.timesheet.ui.ExpenseEntryDialog
@@ -94,8 +99,12 @@ import com.example.timesheet.ui.IncomeBar
 import com.example.timesheet.ui.IncomeReportScreen
 import com.example.timesheet.ui.JournalEntryItem
 import com.example.timesheet.ui.MonthHeaderBar
+import com.example.timesheet.ui.OrganizationDetailScreen
 import com.example.timesheet.ui.PayslipReportScreen
 import com.example.timesheet.ui.PeriodSettingsScreen
+import com.example.timesheet.ui.PhysicalPersonDialogState
+import com.example.timesheet.ui.PhysicalPersonEditDialog
+import com.example.timesheet.ui.PhysicalPersonsScreen
 import com.example.timesheet.ui.ShiftEntryDialog
 import com.example.timesheet.ui.ShiftJournalScreen
 import com.example.timesheet.ui.SurchargeEditScreen
@@ -150,6 +159,8 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
 
     val employees by viewModel.employees.collectAsState()
     val organizations by viewModel.organizations.collectAsState()
+    val employeeOrgLinks by viewModel.employeeOrgLinks.collectAsState()
+    val projects by viewModel.projects.collectAsState()
     val entries by viewModel.entries.collectAsState()
     val currentMonth by viewModel.currentMonth.collectAsState()
     val selectedEmployeeId by viewModel.selectedEmployeeId.collectAsState()
@@ -164,7 +175,6 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     val taxes by viewModel.taxes.collectAsState()
     val reportPeriodStart by viewModel.reportPeriodStart.collectAsState()
     val reportPeriodEnd by viewModel.reportPeriodEnd.collectAsState()
-    // ДОБАВЛЕНО: подписка на фильтры журнала смен из ViewModel
     val filterOrganizationId by viewModel.filterOrganizationId.collectAsState()
     val filterEmployeeId by viewModel.filterEmployeeId.collectAsState()
 
@@ -205,7 +215,13 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     var editingExpenseCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
     var editingTax by remember { mutableStateOf<Tax?>(null) }
 
-    // НОВЫЕ СОСТОЯНИЯ ДЛЯ НАВИГАЦИИ
+    var orgDetailId by remember { mutableStateOf<String?>(null) }
+    var personDialogState by remember { mutableStateOf<PhysicalPersonDialogState?>(null) }
+    var employeeOrgRateDialogState by remember { mutableStateOf<EmployeeOrgRateDialogState?>(null) }
+    var editingProject by remember { mutableStateOf<Project?>(null) }
+    var projectDialogOrgId by remember { mutableStateOf<String?>(null) }
+
+    // ========== НАВИГАЦИЯ ==========
     var showPeriodSettings by remember { mutableStateOf(false) }
     var showShiftJournal by remember { mutableStateOf(false) }
     var showFilterMenu by remember { mutableStateOf(false) }
@@ -260,7 +276,8 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 nameOf = { it.name },
                 expandedEntryId = expandedOrganizationId,
                 onEntryClick = { id ->
-                    expandedOrganizationId = if (expandedOrganizationId == id) null else id
+                    orgDetailId = id
+                    currentScreen = "Организация/Детали"
                 },
                 onEditClick = { entry ->
                     organizationDialogState = DialogState(entry.id, entry.name)
@@ -270,6 +287,83 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                     if (expandedOrganizationId == id) expandedOrganizationId = null
                 },
                 onAddClick = { organizationDialogState = DialogState(null, "") }
+            )
+
+            "Организация/Детали" -> {
+                val org = organizations.find { it.id == orgDetailId }
+                if (org == null) {
+                    currentScreen = "Организация"
+                } else {
+                    OrganizationDetailScreen(
+                        organizationName = org.name,
+                        employees = employees,
+                        employeeOrgLinks = employeeOrgLinks.filter { it.organizationId == org.id },
+                        timeTypes = timeTypes,
+                        surcharges = surcharges,
+                        projects = projects.filter { it.organizationId == org.id },
+                        onBack = { currentScreen = "Организация" },
+                        onRename = { organizationDialogState = DialogState(org.id, org.name) },
+                        onDeleteOrganization = {
+                            viewModel.deleteOrganization(org.id)
+                            orgDetailId = null
+                            currentScreen = "Организация"
+                        },
+                        onEmployeeClick = { employee ->
+                            val link = viewModel.employeeOrgLink(employee.id, org.id)
+                            employeeOrgRateDialogState = EmployeeOrgRateDialogState(
+                                employeeId = employee.id,
+                                employeeName = employee.name,
+                                organizationId = org.id,
+                                initialRate = link?.hourlyRate ?: 0.0,
+                                initialOpeningBalance = link?.openingBalance ?: 0.0,
+                                hasLink = link != null
+                            )
+                        },
+                        onAddTimeType = { editingTimeType = TimeType() },
+                        onEditTimeType = { editingTimeType = it },
+                        onDeleteTimeType = { viewModel.deleteTimeType(it) },
+                        onAddSurcharge = { editingSurcharge = Surcharge() },
+                        onEditSurcharge = { editingSurcharge = it },
+                        onDeleteSurcharge = { viewModel.deleteSurcharge(it) },
+                        onAddProject = {
+                            projectDialogOrgId = org.id
+                            editingProject = Project(organizationId = org.id)
+                        },
+                        onEditProject = {
+                            projectDialogOrgId = org.id
+                            editingProject = it
+                        },
+                        onDeleteProject = { viewModel.deleteProject(it) }
+                    )
+                }
+            }
+
+            "Справочники/Физлица" -> PhysicalPersonsScreen(
+                employees = employees,
+                onMenuClick = onMenuClick,
+                onAddFromContact = { contact ->
+                    viewModel.addOrUpdateEmployee(
+                        id = null,
+                        name = contact.name,
+                        hourlyRate = 0.0,
+                        phone = contact.phone,
+                        photoUri = contact.photoUri,
+                        contactLookupKey = contact.lookupKey
+                    )
+                },
+                onAddManual = {
+                    personDialogState = PhysicalPersonDialogState(null, "", "", null, null)
+                },
+                onEdit = { employee ->
+                    personDialogState = PhysicalPersonDialogState(
+                        editingId = employee.id,
+                        initialName = employee.name,
+                        initialPhone = employee.phone,
+                        initialPhotoUri = employee.photoUri,
+                        initialLookupKey = employee.contactLookupKey
+                    )
+                },
+                onDelete = { id -> viewModel.deleteEmployee(id) }
             )
 
             "Журнал расчетов" -> MainScreen(
@@ -297,7 +391,7 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 onShiftsMenuDismiss = { shiftsMenuExpanded = false },
                 onOpenPeriodSettings = { currentScreen = "Настроить период" },
                 onOpenShiftJournal = { currentScreen = "Журнал смен" },
-                onOpenShiftTemplates = { /* УДАЛЕНО: шаблоны смен */ },
+                onOpenShiftTemplates = { },
                 addMenuExpanded = addMenuExpanded,
                 onAddClick = { addMenuExpanded = true },
                 onAddMenuDismiss = { addMenuExpanded = false },
@@ -355,7 +449,7 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 onDelete = { viewModel.deleteTax(it) }
             )
 
-            // НОВЫЕ ЭКРАНЫ
+            
             "Настроить период" -> PeriodSettingsScreen(
                 onBack = { currentScreen = "Журнал расчетов" },
                 onApplyPeriod = { start, end ->
@@ -450,6 +544,56 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 onConfirm = { name ->
                     viewModel.addOrUpdateOrganization(state.editingId, name)
                     organizationDialogState = null
+                }
+            )
+        }
+
+        personDialogState?.let { state ->
+            PhysicalPersonEditDialog(
+                title = if (state.editingId == null) "Новое физлицо" else "Редактировать физлицо",
+                state = state,
+                onDismiss = { personDialogState = null },
+                onConfirm = { name, phone, photoUri ->
+                    val existingRate = employees.find { it.id == state.editingId }?.hourlyRate ?: 0.0
+                    viewModel.addOrUpdateEmployee(
+                        id = state.editingId,
+                        name = name,
+                        hourlyRate = existingRate,
+                        phone = phone,
+                        photoUri = photoUri,
+                        contactLookupKey = state.initialLookupKey
+                    )
+                    personDialogState = null
+                }
+            )
+        }
+
+        employeeOrgRateDialogState?.let { state ->
+            EmployeeOrgRateDialog(
+                state = state,
+                onDismiss = { employeeOrgRateDialogState = null },
+                onSave = { rate, balance ->
+                    viewModel.upsertEmployeeOrgLink(state.employeeId, state.organizationId, rate, balance)
+                    employeeOrgRateDialogState = null
+                },
+                onRemoveFromOrganization = {
+                    viewModel.removeEmployeeFromOrganization(state.employeeId, state.organizationId)
+                    employeeOrgRateDialogState = null
+                }
+            )
+        }
+
+        editingProject?.let { project ->
+            val orgId = projectDialogOrgId ?: project.organizationId
+            val isNew = projects.none { it.id == project.id }
+            EntityEditDialog(
+                title = if (isNew) "Новый проект" else "Редактировать проект",
+                initialName = project.name,
+                onDismiss = { editingProject = null; projectDialogOrgId = null },
+                onConfirm = { name ->
+                    viewModel.addOrUpdateProject(if (isNew) null else project.id, orgId, name)
+                    editingProject = null
+                    projectDialogOrgId = null
                 }
             )
         }
@@ -1230,7 +1374,7 @@ fun AppDrawerContent(
         DrawerRow(
             title = "Организация",
             icon = Icons.Filled.ShoppingBag,
-            selected = currentScreen == "Организация",
+            selected = currentScreen == "Организация" || currentScreen == "Организация/Детали",
             onClick = { onNavigate("Организация") }
         )
         DrawerRow(
@@ -1248,6 +1392,13 @@ fun AppDrawerContent(
             trailingIcon = if (referencesExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore
         )
         if (referencesExpanded) {
+            DrawerRow(
+                title = "Физлица",
+                icon = Icons.Filled.Person,
+                selected = currentScreen == "Справочники/Физлица",
+                onClick = { onNavigate("Справочники/Физлица") },
+                indent = true
+            )
             DrawerRow(
                 title = "Типы времени",
                 icon = Icons.Filled.AccessTime,

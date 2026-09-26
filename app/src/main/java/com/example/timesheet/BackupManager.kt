@@ -1,6 +1,11 @@
 package com.example.timesheet.data
 
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -18,11 +23,13 @@ data class BackupFile(
 
 object BackupManager {
 
+    private const val BACKUP_EXTENSION = "bd"
+
     private fun backupsDir(context: Context): File =
         File(context.filesDir, "backups").apply { if (!exists()) mkdirs() }
 
     fun listBackups(context: Context): List<BackupFile> =
-        backupsDir(context).listFiles { f -> f.extension == "json" }
+        backupsDir(context).listFiles { f -> f.extension == BACKUP_EXTENSION || f.extension == "json" }
             ?.sortedByDescending { it.lastModified() }
             ?.map { BackupFile(it, it.nameWithoutExtension, it.length(), it.lastModified()) }
             ?: emptyList()
@@ -41,10 +48,17 @@ object BackupManager {
         val safeLabel = (label?.takeIf { it.isNotBlank() } ?: "Зеленый ТабельBackup")
             .replace(Regex("[^A-Za-zА-Яа-я0-9 _-]"), "")
         val timestamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").format(LocalDateTime.now())
-        val file = File(backupsDir(context), "${safeLabel}_$timestamp.json")
+        val file = File(backupsDir(context), "${safeLabel}_$timestamp.bd")
         file.writeText(root.toString(2))
+
+        runCatching { copyToPublicDownloads(context, file) }
+            .onSuccess { lastPublicExportFolder = it }
         return file
     }
+
+    /** Путь папки (внутри "Download"), куда был скопирован последний бекап. */
+    var lastPublicExportFolder: String? = null
+        private set
 
     fun restoreBackup(file: File): Pair<AppState, JSONObject> {
         val root = JSONObject(file.readText())
@@ -54,6 +68,57 @@ object BackupManager {
     }
 
     fun deleteBackup(file: File) = file.delete()
+
+    private const val PUBLIC_BACKUP_ROOT = "ТабельБекапы"
+
+    /**
+     * Копирует файл бекапа в общедоступную папку "Download/ТабельБекапы/<дата и
+     * время>" — при каждом экспорте создаётся своя новая подпапка, чтобы бекапы
+     * разных дней не путались между собой. На Android 10+ используется
+     * MediaStore (разрешений не требует), на более старых версиях — прямая
+     * запись в публичную папку "Загрузки".
+     */
+    private fun copyToPublicDownloads(context: Context, file: File): String {
+        val folderName = DateTimeFormatter.ofPattern("dd.MM.yyyy_HH-mm-ss").format(LocalDateTime.now())
+        val relativeFolder = "$PUBLIC_BACKUP_ROOT/$folderName"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/$relativeFolder")
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Не удалось создать файл в Загрузках")
+            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), relativeFolder)
+            if (!dir.exists()) dir.mkdirs()
+            val outFile = File(dir, file.name)
+            file.copyTo(outFile, overwrite = true)
+        }
+        return relativeFolder
+    }
+
+
+
+
+    fun exportBackupToUri(context: Context, file: File, targetUri: Uri): Boolean = runCatching {
+        context.contentResolver.openOutputStream(targetUri)?.use { out ->
+            file.inputStream().use { it.copyTo(out) }
+        } ?: return false
+        true
+    }.getOrDefault(false)
+
+
+    fun copyUriToTempFile(context: Context, uri: Uri, suffix: String): File {
+        val tmp = File.createTempFile("import_", suffix, context.cacheDir)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            tmp.outputStream().use { output -> input.copyTo(output) }
+        } ?: error("Не удалось прочитать выбранный файл")
+        return tmp
+    }
 
     fun stateToJson(state: AppState): JSONObject {
         val root = JSONObject()
@@ -65,9 +130,33 @@ object BackupManager {
                 put("id", it.id)
                 put("name", it.name)
                 put("hourlyRate", it.hourlyRate)
+                put("phone", it.phone)
+                put("photoUri", it.photoUri ?: JSONObject.NULL)
+                put("contactLookupKey", it.contactLookupKey ?: JSONObject.NULL)
             })
         }
         root.put("employees", employees)
+
+        val employeeOrgLinks = JSONArray()
+        state.employeeOrgLinks.forEach {
+            employeeOrgLinks.put(JSONObject().apply {
+                put("employeeId", it.employeeId)
+                put("organizationId", it.organizationId)
+                put("hourlyRate", it.hourlyRate)
+                put("openingBalance", it.openingBalance)
+            })
+        }
+        root.put("employeeOrgLinks", employeeOrgLinks)
+
+        val projects = JSONArray()
+        state.projects.forEach {
+            projects.put(JSONObject().apply {
+                put("id", it.id)
+                put("organizationId", it.organizationId)
+                put("name", it.name)
+            })
+        }
+        root.put("projects", projects)
 
         val organizations = JSONArray()
         state.organizations.forEach {
@@ -92,27 +181,19 @@ object BackupManager {
                 put("expenseCategoryId", it.expenseCategoryId ?: JSONObject.NULL)
                 put("unitId", it.unitId ?: JSONObject.NULL)
                 put("quantity", it.quantity)
-                // ДОБАВЛЕНО: сохраняем доплаты, привязанные к смене
+
                 put("surchargeIds", JSONArray(it.surchargeIds))
-                // ИСПРАВЛЕНО: раньше startTime/endTime/shiftType смены вообще не сохранялись —
-                // при восстановлении бекапа время и тип смены терялись.
+
                 put("startTime", it.startTime?.toString() ?: JSONObject.NULL)
                 put("endTime", it.endTime?.toString() ?: JSONObject.NULL)
                 put("shiftType", it.shiftType.name)
-                // ДОБАВЛЕНО (диалог «Смена» по макету)
+
                 put("unpaidBreakMinutes", it.unpaidBreakMinutes)
                 put("overtimeEnabled", it.overtimeEnabled)
                 put("projectName", it.projectName)
-                // ДОБАВЛЕНО: сохраняем реальные вложения (URI файлов/фото) записи
+
                 put("attachments", JSONArray(it.attachments))
-                // ИСПРАВЛЕНО (ТЗ: «ты жестко сломал мне сохранения» / «настройки
-                // изменяются сами по себе»): раньше timeTypeId и adjustmentTypeName
-                // вообще не попадали в локальный снимок (app_state.json), который
-                // пишется на КАЖДОЕ изменение и читается заново при каждом запуске
-                // приложения. Из-за этого при перезапуске/сворачивании приложения
-                // выбранный тип времени смены и тип доплаты/удержания слетали —
-                // выглядело так, будто "настройки сами меняются", хотя на самом
-                // деле терялась связь с записью справочника.
+
                 put("timeTypeId", it.timeTypeId ?: JSONObject.NULL)
                 put("adjustmentTypeName", it.adjustmentTypeName)
             })
@@ -205,7 +286,25 @@ object BackupManager {
                     Employee(
                         id = o.getString("id"),
                         name = o.getString("name"),
-                        hourlyRate = o.optDouble("hourlyRate", 0.0)
+                        hourlyRate = o.optDouble("hourlyRate", 0.0),
+                        phone = o.optString("phone", ""),
+                        photoUri = if (o.isNull("photoUri")) null else o.optString("photoUri"),
+                        contactLookupKey = if (o.isNull("contactLookupKey")) null else o.optString("contactLookupKey")
+                    )
+                )
+            }
+        }
+
+        val employeeOrgLinks = mutableListOf<EmployeeOrgLink>()
+        root.optJSONArray("employeeOrgLinks")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                employeeOrgLinks.add(
+                    EmployeeOrgLink(
+                        employeeId = o.getString("employeeId"),
+                        organizationId = o.getString("organizationId"),
+                        hourlyRate = o.optDouble("hourlyRate", 0.0),
+                        openingBalance = o.optDouble("openingBalance", 0.0)
                     )
                 )
             }
@@ -363,6 +462,20 @@ object BackupManager {
             }
         }
 
+        val projects = mutableListOf<Project>()
+        root.optJSONArray("projects")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                projects.add(
+                    Project(
+                        id = o.getString("id"),
+                        organizationId = o.optString("organizationId", ""),
+                        name = o.optString("name", "")
+                    )
+                )
+            }
+        }
+
         return AppState(
             employees = employees,
             organizations = organizations,
@@ -373,7 +486,9 @@ object BackupManager {
             timeTypes = timeTypes,
             expenseCategories = expenseCategories,
             units = units,
-            taxes = taxes
+            taxes = taxes,
+            employeeOrgLinks = employeeOrgLinks,
+            projects = projects
         )
     }
 }

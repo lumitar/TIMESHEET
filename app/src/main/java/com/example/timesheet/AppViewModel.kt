@@ -1,6 +1,7 @@
 package com.example.timesheet.data
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _organizations = MutableStateFlow<List<Organization>>(emptyList())
     val organizations: StateFlow<List<Organization>> = _organizations.asStateFlow()
+
+    private val _employeeOrgLinks = MutableStateFlow<List<EmployeeOrgLink>>(emptyList())
+    val employeeOrgLinks: StateFlow<List<EmployeeOrgLink>> = _employeeOrgLinks.asStateFlow()
+
+    private val _projects = MutableStateFlow<List<Project>>(emptyList())
+    val projects: StateFlow<List<Project>> = _projects.asStateFlow()
 
     private val _entries = MutableStateFlow<List<LedgerEntry>>(emptyList())
     val entries: StateFlow<List<LedgerEntry>> = _entries.asStateFlow()
@@ -72,7 +79,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _reportQuickPeriodId = MutableStateFlow<String?>("this_month")
     val reportQuickPeriodId: StateFlow<String?> = _reportQuickPeriodId.asStateFlow()
 
-    // ========== ФИЛЬТРЫ ЖУРНАЛА СМЕН (ДОБАВЛЕНО) ==========
+
     private val _filterOrganizationId = MutableStateFlow<String?>(null)
     val filterOrganizationId: StateFlow<String?> = _filterOrganizationId.asStateFlow()
 
@@ -141,14 +148,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ========== СОТРУДНИКИ ==========
-    fun addOrUpdateEmployee(id: String?, name: String, hourlyRate: Double) {
+    fun addOrUpdateEmployee(
+        id: String?,
+        name: String,
+        hourlyRate: Double,
+        phone: String = "",
+        photoUri: String? = null,
+        contactLookupKey: String? = null
+    ) {
         val list = _employees.value.toMutableList()
         val entry = if (id == null) {
-            Employee(name = name, hourlyRate = hourlyRate).also { list.add(it) }
+            Employee(
+                name = name,
+                hourlyRate = hourlyRate,
+                phone = phone,
+                photoUri = photoUri,
+                contactLookupKey = contactLookupKey
+            ).also { list.add(it) }
         } else {
             val idx = list.indexOfFirst { it.id == id }
-            if (idx >= 0) list[idx].copy(name = name, hourlyRate = hourlyRate).also { list[idx] = it }
-            else null
+            if (idx >= 0) {
+                val existing = list[idx]
+                list[idx].copy(
+                    name = name,
+                    hourlyRate = hourlyRate,
+                    phone = phone,
+                    photoUri = photoUri ?: existing.photoUri,
+                    contactLookupKey = contactLookupKey ?: existing.contactLookupKey
+                ).also { list[idx] = it }
+            } else null
         }
         _employees.value = list
         entry?.let { syncLaunch { FirebaseRepository.upsertEmployee(it) } }
@@ -157,8 +185,58 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteEmployee(id: String) {
         _employees.value = _employees.value.filterNot { it.id == id }
+        _employeeOrgLinks.value = _employeeOrgLinks.value.filterNot { it.employeeId == id }
         if (_selectedEmployeeId.value == id) _selectedEmployeeId.value = null
         syncLaunch { FirebaseRepository.deleteEmployee(id) }
+        persistLocalSnapshot()
+    }
+
+    // ========== СОТРУДНИКИ В ОРГАНИЗАЦИИ ==========
+    fun employeeOrgLink(employeeId: String, organizationId: String): EmployeeOrgLink? =
+        _employeeOrgLinks.value.find { it.employeeId == employeeId && it.organizationId == organizationId }
+
+    fun employeesInOrganization(organizationId: String): List<EmployeeOrgLink> =
+        _employeeOrgLinks.value.filter { it.organizationId == organizationId }
+
+    fun upsertEmployeeOrgLink(
+        employeeId: String,
+        organizationId: String,
+        hourlyRate: Double,
+        openingBalance: Double
+    ) {
+        val list = _employeeOrgLinks.value.toMutableList()
+        val idx = list.indexOfFirst { it.employeeId == employeeId && it.organizationId == organizationId }
+        val link = EmployeeOrgLink(employeeId, organizationId, hourlyRate, openingBalance)
+        if (idx >= 0) list[idx] = link else list.add(link)
+        _employeeOrgLinks.value = list
+        persistLocalSnapshot()
+    }
+
+    fun removeEmployeeFromOrganization(employeeId: String, organizationId: String) {
+        _employeeOrgLinks.value = _employeeOrgLinks.value.filterNot {
+            it.employeeId == employeeId && it.organizationId == organizationId
+        }
+        persistLocalSnapshot()
+    }
+
+    // ========== ПРОЕКТЫ ОРГАНИЗАЦИИ ==========
+    fun projectsInOrganization(organizationId: String): List<Project> =
+        _projects.value.filter { it.organizationId == organizationId }
+
+    fun addOrUpdateProject(id: String?, organizationId: String, name: String) {
+        val list = _projects.value.toMutableList()
+        if (id == null) {
+            list.add(Project(organizationId = organizationId, name = name))
+        } else {
+            val idx = list.indexOfFirst { it.id == id }
+            if (idx >= 0) list[idx] = list[idx].copy(name = name)
+        }
+        _projects.value = list
+        persistLocalSnapshot()
+    }
+
+    fun deleteProject(id: String) {
+        _projects.value = _projects.value.filterNot { it.id == id }
         persistLocalSnapshot()
     }
 
@@ -369,7 +447,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         timeTypes = _timeTypes.value,
         expenseCategories = _expenseCategories.value,
         units = _units.value,
-        taxes = _taxes.value
+        taxes = _taxes.value,
+        employeeOrgLinks = _employeeOrgLinks.value,
+        projects = _projects.value
     )
 
     private fun currentSettingsJson(): JSONObject = JSONObject().apply {
@@ -380,13 +460,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         put("reportPeriodStart", _reportPeriodStart.value.toString())
         put("reportPeriodEnd", _reportPeriodEnd.value.toString())
         put("reportQuickPeriodId", _reportQuickPeriodId.value ?: JSONObject.NULL)
-        // ДОБАВЛЕНО: сохранение фильтров журнала смен
+
         put("filterOrganizationId", _filterOrganizationId.value ?: JSONObject.NULL)
         put("filterEmployeeId", _filterEmployeeId.value ?: JSONObject.NULL)
     }
 
     fun createBackup(label: String? = null): File =
         BackupManager.createBackup(getApplication(), currentState(), currentSettingsJson(), label)
+
+    fun lastExportFolder(): String? = BackupManager.lastPublicExportFolder
 
     fun listBackups(): List<BackupFile> = BackupManager.listBackups(getApplication())
 
@@ -402,12 +484,60 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _expenseCategories.value = state.expenseCategories.ifEmpty { defaultExpenseCategories() }
         _units.value = state.units.ifEmpty { defaultUnits() }
         _taxes.value = state.taxes.ifEmpty { defaultTaxes() }
+        _employeeOrgLinks.value = state.employeeOrgLinks
+        _projects.value = state.projects
 
         applySettingsJson(settings)
         persistLocalSnapshot()
     }
 
     fun deleteBackup(file: File) = BackupManager.deleteBackup(file)
+
+
+    fun exportBackupToUri(file: File, targetUri: Uri): Boolean =
+        BackupManager.exportBackupToUri(getApplication(), file, targetUri)
+
+
+    fun importBackupFromUri(uri: Uri): Boolean = runCatching {
+        val tmp = BackupManager.copyUriToTempFile(getApplication(), uri, ".bd")
+        try {
+            restoreBackup(tmp)
+        } finally {
+            tmp.delete()
+        }
+    }.isSuccess
+
+    /**
+     * Единый импорт: пользователь выбирает файл через системный выбор ("Мои
+     * файлы"), а формат определяется автоматически — сначала пробуем прочитать
+     * его как наш .bd-бекап, и только если это не получилось — как .db-бекап
+     * старого приложения.
+     */
+    fun importAnyBackup(uri: Uri): ImportResult {
+        if (importBackupFromUri(uri)) return ImportResult.OwnFormat
+        val summary = importLegacyDatabase(uri)
+        return if (summary != null) ImportResult.LegacyFormat(summary) else ImportResult.Failed
+    }
+
+    sealed class ImportResult {
+        object OwnFormat : ImportResult()
+        data class LegacyFormat(val summary: LegacyImporter.Summary) : ImportResult()
+        object Failed : ImportResult()
+    }
+
+
+    fun importLegacyDatabase(uri: Uri): LegacyImporter.Summary? = runCatching {
+        val (merged, summary) = LegacyImporter.importFromUri(getApplication(), uri, currentState())
+        _employees.value = merged.employees
+        _organizations.value = merged.organizations
+        _entries.value = merged.entries
+        _timeTypes.value = merged.timeTypes.ifEmpty { defaultTimeTypes() }
+        _expenseCategories.value = merged.expenseCategories.ifEmpty { defaultExpenseCategories() }
+        _units.value = merged.units.ifEmpty { defaultUnits() }
+        _taxes.value = merged.taxes.ifEmpty { defaultTaxes() }
+        persistLocalSnapshot()
+        summary
+    }.getOrNull()
 
     private fun applySettingsJson(settings: JSONObject) {
         if (!settings.isNull("selectedEmployeeId")) {
@@ -423,7 +553,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _reportQuickPeriodId.value = settings.optString("reportQuickPeriodId").takeIf { it.isNotBlank() }
         }
         _cloudSyncEnabled.value = settings.optBoolean("cloudSyncEnabled", false)
-        // ДОБАВЛЕНО: восстановление фильтров журнала смен
+
         if (!settings.isNull("filterOrganizationId")) {
             _filterOrganizationId.value = settings.optString("filterOrganizationId").takeIf { it.isNotBlank() }
         }
@@ -456,6 +586,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _expenseCategories.value = state.expenseCategories.ifEmpty { defaultExpenseCategories() }
                 _units.value = state.units.ifEmpty { defaultUnits() }
                 _taxes.value = state.taxes.ifEmpty { defaultTaxes() }
+                _employeeOrgLinks.value = state.employeeOrgLinks
+                _projects.value = state.projects
 
                 val settings = root.optJSONObject("settings") ?: JSONObject()
                 applySettingsJson(settings)

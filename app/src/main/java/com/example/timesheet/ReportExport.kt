@@ -8,30 +8,6 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 
-/**
- * ДОБАВЛЕНО (ТЗ): «возможность отправки этого документа (в соц. сети) в формате xls и pdf».
- *
- * ВАЖНО — требует ручной донастройки проекта (нет доступа к текущему AndroidManifest.xml,
- * поэтому не мог внести изменения автоматически):
- * 1) В AndroidManifest.xml внутри <application> добавить:
- *
- *    <provider
- *        android:name="androidx.core.content.FileProvider"
- *        android:authorities="${applicationId}.fileprovider"
- *        android:exported="false"
- *        android:grantUriPermissions="true">
- *        <meta-data
- *            android:name="android.support.FILE_PROVIDER_PATHS"
- *            android:resource="@xml/file_paths" />
- *    </provider>
- *
- * 2) Файл res/xml/file_paths.xml уже добавлен в этот патч.
- * 3) Убедиться, что в build.gradle подключён androidx.core:core-ktx (обычно уже подключён).
- *
- * Формат .xls реализован через HTML-таблицу с расширением .xls — Excel/Google Sheets
- * открывают такой файл корректно. Полноценный бинарный XLSX через Apache POI не подключался,
- * чтобы не тянуть в проект новую тяжёлую зависимость без согласования.
- */
 object ReportExport {
 
     private fun cacheDir(context: Context): File =
@@ -50,9 +26,6 @@ object ReportExport {
         context.startActivity(chooser)
     }
 
-    // ДОБАВЛЕНО (ТЗ: «кнопка предв.просмотр должна тоже быть рабочей»): открывает
-    // сгенерированный файл во внешнем просмотрщике (ACTION_VIEW), в отличие от
-    // shareFile/ACTION_SEND — это именно предпросмотр, а не отправка/шаринг.
     private fun viewFile(context: Context, file: File, mimeType: String) {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {

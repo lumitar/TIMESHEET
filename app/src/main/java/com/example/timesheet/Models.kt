@@ -8,12 +8,29 @@ import java.util.UUID
 data class Employee(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "",
-    val hourlyRate: Double = 0.0
+    val hourlyRate: Double = 0.0,
+    val phone: String = "",
+    val photoUri: String? = null,
+    val contactLookupKey: String? = null
 )
 
 data class Organization(
     val id: String = UUID.randomUUID().toString(),
     val name: String = ""
+)
+
+/**
+ * Привязка сотрудника (справочник «Физлица») к организации: ставка и остаток
+ * на начало периода задаются отдельно для каждой пары сотрудник/организация,
+ * поэтому один и тот же человек может числиться в нескольких организациях с
+ * разными условиями. Наличие такой записи также означает, что сотрудник
+ * показывается во вкладке «Работники» соответствующей организации.
+ */
+data class EmployeeOrgLink(
+    val employeeId: String,
+    val organizationId: String,
+    val hourlyRate: Double = 0.0,
+    val openingBalance: Double = 0.0
 )
 
 enum class EntryType {
@@ -32,31 +49,6 @@ enum class ShiftType {
     WEEKEND
 }
 
-/**
- * ИСПРАВЛЕНО (ТЗ: «сделать нормальную единую связь со всеми вкладками, у меня же
- * есть база данных», «почему я могу удалить из справочника дневную смену, а в
- * самой смене она останется», «почему когда я добавляю сверхурочную смену она
- * всё равно отображается как дневная»):
- *
- * Раньше выбор типа смены в диалоге «Смена» был жёстко зашитым списком из 5
- * значений enum `ShiftType` — он вообще не был связан со справочником «Типы
- * времени» (`AppViewModel.timeTypes`). Поэтому:
- *  - удаление записи из справочника никак не влияло на диалог смены (список
- *    оставался прежним, «зашитым» в код);
- *  - добавление своего типа в справочник никак не появлялось в диалоге смены
- *    (там просто не было механизма его показать);
- *  - при сохранении реально писался только фиксированный `ShiftType`, поэтому
- *    название и цвет в журнале всегда откатывались к одному из 5 стандартных.
- *
- * Теперь диалог «Смена» выбирает тип смены НАПРЯМУЮ из справочника
- * `timeTypes` (см. `ShiftEntryDialog`), а выбранный `TimeType.id` пишется в
- * `LedgerEntry.timeTypeId` — это и есть единый источник правды, общий для
- * диалога смены, журнала и справочника. Старый enum `ShiftType` оставлен
- * только для расчёта надбавки к оплате (`PayrollCalculator`, где давно
- * завязана формула множителей 1.0/1.4/1.5/2.0) — он теперь не выбирается
- * пользователем напрямую, а автоматически подбирается по названию выбранного
- * типа из справочника функцией `inferShiftTypeFromTimeType`.
- */
 fun inferShiftTypeFromTimeType(timeType: TimeType?): ShiftType {
     val name = timeType?.name?.lowercase() ?: return ShiftType.DAY
     return when {
@@ -81,27 +73,9 @@ fun shiftTypeTimeTypeId(shiftType: ShiftType): String = when (shiftType) {
     ShiftType.WEEKEND -> "tt_unpaid_vacation"
 }
 
-/**
- * ИСПРАВЛЕНО (ТЗ: «почему когда я добавляю сверхурочную смену она всё равно
- * отображается как дневная»): «сверхурочная» — это НЕ отдельный пункт
- * справочника (в списке типов времени по умолчанию такого нет вообще), это
- * отдельная галочка «Оплата сверхурочных часов» (`overtimeEnabled`) в диалоге
- * «Смена». Раньше она влияла ТОЛЬКО на множитель в PayrollCalculator и нигде
- * не отображалась — смена с типом «Дневная смена» + включённой галочкой
- * сверхурочных везде так и продолжала называться и выглядеть как обычная
- * «Дневная смена». Теперь везде, где показывается название типа смены,
- * добавляется явная пометка.
- */
 fun displayShiftLabel(baseName: String, overtimeEnabled: Boolean): String =
     if (overtimeEnabled) "$baseName · Сверхурочно" else baseName
 
-/**
- * ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»): общий
- * фильтр ввода для ВСЕХ денежных/числовых полей проекта — один и тот же код
- * вместо нескольких разных копий (`moneyInputFilter` в ShiftEntryDialog.kt,
- * FullScreenEntryDialogs.kt, `moneyInputFilterLegacy` в EntryDialogs.kt),
- * которые могли незаметно разойтись между собой.
- */
 fun moneyInputFilter(input: String): String =
     input.filter { c -> c.isDigit() || c == '.' || c == ',' }
 
@@ -115,16 +89,6 @@ fun moneySignedInputFilter(input: String): String {
     return if (negative) "-$digitsOnly" else digitsOnly
 }
 
-/**
- * ДОБАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): настоящая
- * проверка пересечения по времени двух смен в пределах одного дня (с учётом
- * ночных смен, переходящих через полночь — тот же способ сравнения, что и в
- * `LedgerEntry.calculateHours()`). Раньше ничего не предупреждало пользователя,
- * что новая смена по времени накладывается на уже существующую смену того же
- * сотрудника в тот же день — теперь диалог «Смена» показывает предупреждение,
- * если это произошло, вместо того чтобы дать записям молча наложиться друг на
- * друга без единого сигнала пользователю.
- */
 fun timeRangesOverlap(
     aStart: LocalTime?,
     aEnd: LocalTime?,
@@ -141,13 +105,6 @@ fun timeRangesOverlap(
     return aStartSec < bEndSec && bStartSec < aEndSec
 }
 
-/**
- * ДОБАВЛЕНО (ТЗ: «чтобы человек мог добавить в смены и остальные вкладки
- * промежуток дат, а сейчас можно выбрать только одно число»): общий способ
- * получить список дат периода [start; end] включительно, используемый всеми
- * диалогами добавления записи для создания одной записи на каждый день
- * выбранного диапазона.
- */
 fun dateRangeDays(start: LocalDate, end: LocalDate): List<LocalDate> {
     if (end.isBefore(start)) return listOf(start)
     return generateSequence(start) { d -> if (d.isBefore(end)) d.plusDays(1) else null }.toList()
@@ -168,21 +125,16 @@ data class LedgerEntry(
     val expenseCategoryId: String? = null,
     val unitId: String? = null,
     val quantity: Double = 0.0,
-    // ДОБАВЛЕНО (ТЗ «настроить правильную математику»): доплаты/удержания,
-    // применённые к этой смене (переносятся из шаблона смены при применении).
+
     val surchargeIds: List<String> = emptyList(),
-    // ДОБАВЛЕНО (диалог «Смена» по макету): неоплачиваемые перерывы (минуты),
-    // признак «Оплата сверхурочных часов» и привязанный проект.
+
     val unpaidBreakMinutes: Int = 0,
     val overtimeEnabled: Boolean = false,
     val projectName: String = "",
-    // ДОБАВЛЕНО (ТЗ: полноэкранные диалоги «Доплата, удержание» и «Запись табеля»):
-    // выбранный тип доплаты/удержания (включая собственные варианты пользователя)
-    // и привязка к записи справочника «Типы времени» для записей табеля.
+
     val adjustmentTypeName: String = "",
     val timeTypeId: String? = null,
-    // ДОБАВЛЕНО (ТЗ «сделать открытие галереи/файлов настоящими»): реальные вложения
-    // записи — content:// URI файлов/фото, выбранных через системный выбор файлов.
+
     val attachments: List<String> = emptyList()
 ) {
     /** Полная длительность смены по времени начала/конца (без вычета перерывов). */
@@ -204,22 +156,7 @@ data class LedgerEntry(
 // ========== МОДЕЛИ ДЛЯ СПРАВОЧНИКОВ ==========
 
 // 1. Типы времени
-/**
- * ДОБАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике отображались
- * визуально и тоже на что-то влияли»): раньше у типа времени не было
- * собственного множителя оплаты — расчёт зарплаты (`PayrollCalculator`)
- * определял множитель, УГАДЫВАЯ его по русским словам в названии типа
- * (`inferShiftTypeFromTimeType`: «сверхуроч», «ноч», «выходн»/«празд»,
- * «командиров»). Из-за этого любой СВОЙ тип, придуманный пользователем в
- * справочнике («Смена А», «Дежурство» и т.п.), никогда не подбирал нужный
- * множитель — деньги считались так, будто это всегда обычная дневная смена,
- * что бы пользователь ни ввёл в название. Теперь множитель — обычное поле
- * самого типа времени (по умолчанию ×1.0), пользователь редактирует его прямо
- * в справочнике, и `PayrollCalculator` берёт именно это значение напрямую —
- * никакого угадывания по словам для новых/пользовательских типов. Угадывание
- * по названию оставлено только как запасной вариант для СТАРЫХ записей,
- * созданных до этого исправления и не имеющих `timeTypeId` вовсе.
- */
+
 data class TimeType(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "",
@@ -260,13 +197,6 @@ fun defaultUnits(): List<UnitOfMeasure> = listOf(
     UnitOfMeasure("unit_piece", "Штука", "шт")
 )
 
-// ДОБАВЛЕНО (ТЗ: «Сделать в справочнике встроенными данные категории (с
-// возможностью редактирования)»): раньше все три фабрики возвращали пустой
-// список — экраны «Типы времени» / «Категории расходов» / «Налоги» были
-// пустыми при первом запуске. Данные ниже и порядок цветов взяты из
-// референс-скриншотов в ТЗ. isBuiltIn = true просто помечает происхождение
-// записи (сама фабрика), удаление/редактирование этим не ограничено —
-// экраны и так уже поддерживают и то, и другое.
 fun defaultTimeTypes(): List<TimeType> = listOf(
     TimeType(id = "tt_sick", name = "Больничный", code = "Б", color = "#8395A7", isBuiltIn = true, payMultiplier = 1.0),
     TimeType(id = "tt_evening", name = "Вечерняя смена", code = "В", color = "#48DBFB", isBuiltIn = true, payMultiplier = 1.0),
@@ -299,7 +229,9 @@ data class AppState(
     val timeTypes: List<TimeType> = defaultTimeTypes(),
     val expenseCategories: List<ExpenseCategory> = defaultExpenseCategories(),
     val units: List<UnitOfMeasure> = defaultUnits(),
-    val taxes: List<Tax> = defaultTaxes()
+    val taxes: List<Tax> = defaultTaxes(),
+    val employeeOrgLinks: List<EmployeeOrgLink> = emptyList(),
+    val projects: List<Project> = emptyList()
 )
 
 // ========== ДОПЛАТЫ И ШАБЛОНЫ ==========
@@ -327,6 +259,13 @@ data class ShiftTemplate(
     val projectName: String = "",
     val surchargeIds: List<String> = emptyList(),
     val comment: String = ""
+)
+
+/** Проект в рамках конкретной организации (вкладка «Проекты» в карточке организации). */
+data class Project(
+    val id: String = UUID.randomUUID().toString(),
+    val organizationId: String = "",
+    val name: String = ""
 )
 
 fun defaultSurchargeLibrary(): List<Surcharge> = listOf(

@@ -56,10 +56,7 @@ fun ShiftJournalScreen(
     entries: List<LedgerEntry>,
     employees: List<Employee>,
     organizations: List<Organization>,
-    timeTypes: List<TimeType>, // ДОБАВЛЕНО: справочник типов времени
-    // ДОБАВЛЕНО (ТЗ: справочники должны быть связаны со всем проектом): нужны, чтобы
-    // в журнале смен показывались настоящие названия категории расхода и единицы
-    // измерения, а не их id.
+    timeTypes: List<TimeType>,
     expenseCategories: List<com.example.timesheet.data.ExpenseCategory> = emptyList(),
     units: List<com.example.timesheet.data.UnitOfMeasure> = emptyList(),
     periodStart: LocalDate,
@@ -216,8 +213,6 @@ fun ShiftJournalScreen(
                         .padding(horizontal = 16.dp)
                 ) {
                     items(
-                        // ИСПРАВЛЕНО (ТЗ: «выбор времени во всех вкладках должно влиять на
-                        // записи в главном меню»): добавлена сортировка по времени внутри дня.
                         filteredEntries.sortedWith(
                             compareByDescending<LedgerEntry> { it.date }
                                 .thenByDescending { it.startTime ?: java.time.LocalTime.MIN }

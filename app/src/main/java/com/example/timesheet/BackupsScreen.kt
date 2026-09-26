@@ -1,5 +1,7 @@
 package com.example.timesheet.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,16 +11,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -56,7 +61,48 @@ fun BackupsScreen(
     var backupToActOn by remember { mutableStateOf<BackupFile?>(null) }
     val dateFormat = remember { SimpleDateFormat("d MMM yyyy г. HH:mm:ss", Locale("ru")) }
 
+    var resultMessage by remember { mutableStateOf<String?>(null) }
+    var backupToSaveToPhone by remember { mutableStateOf<BackupFile?>(null) }
+
     fun refresh() { backups = viewModel.listBackups() }
+
+    // Импорт: пользователь сам открывает "Мои файлы" и выбирает файл бекапа
+    // (.bd — наш формат, или .db — бекап старого приложения); формат
+    // определяется автоматически.
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            resultMessage = when (val result = viewModel.importAnyBackup(uri)) {
+                is AppViewModel.ImportResult.OwnFormat -> "Бекап восстановлен."
+                is AppViewModel.ImportResult.LegacyFormat -> {
+                    val summary = result.summary
+                    "Импортировано из старого приложения:\n" +
+                            "• организаций: ${summary.organizations}\n" +
+                            "• сотрудников: ${summary.employees}\n" +
+                            "• смен: ${summary.shifts}\n" +
+                            "• расходов: ${summary.expenses}\n" +
+                            "• выплат: ${summary.payments}\n" +
+                            "• налоговых записей: ${summary.taxes}"
+                }
+                is AppViewModel.ImportResult.Failed ->
+                    "Не удалось прочитать этот файл как бекап. Выберите файл .bd или .db."
+            }
+            refresh()
+        }
+    }
+
+    // Сохранение конкретного бекапа туда, куда укажет пользователь (SAF "Сохранить как").
+    val saveToPhoneLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        val backup = backupToSaveToPhone
+        if (uri != null && backup != null) {
+            val ok = viewModel.exportBackupToUri(backup.file, uri)
+            resultMessage = if (ok) "Бекап сохранён на телефон." else "Не удалось сохранить файл."
+        }
+        backupToSaveToPhone = null
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -93,15 +139,31 @@ fun BackupsScreen(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    viewModel.createBackup()
-                    refresh()
-                },
-                containerColor = Color(0xFFFF9800),
-                contentColor = Color.White
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = "Создать бекап")
+            Column(horizontalAlignment = Alignment.End) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        viewModel.createBackup()
+                        refresh()
+                        val folder = viewModel.lastExportFolder()
+                        resultMessage = if (folder != null) {
+                            "Бекап создан и сохранён в новую папку:\n$folder"
+                        } else {
+                            "Бекап создан."
+                        }
+                    },
+                    containerColor = Color(0xFFFF9800),
+                    contentColor = Color.White,
+                    icon = { Icon(Icons.Filled.FileDownload, contentDescription = null) },
+                    text = { Text("Экспорт") }
+                )
+                Spacer(modifier = Modifier.size(12.dp))
+                ExtendedFloatingActionButton(
+                    onClick = { importLauncher.launch(arrayOf("*/*")) },
+                    containerColor = Color(0xFF5CA02F),
+                    contentColor = Color.White,
+                    icon = { Icon(Icons.Filled.CloudUpload, contentDescription = null) },
+                    text = { Text("Импорт") }
+                )
             }
         }
     ) { innerPadding ->
@@ -110,7 +172,7 @@ fun BackupsScreen(
                 modifier = Modifier.fillMaxSize().padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Бекапов пока нет. Нажмите \"+\", чтобы создать.")
+                Text("Бекапов пока нет. Нажмите \"Экспорт\", чтобы создать.")
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
@@ -148,7 +210,7 @@ fun BackupsScreen(
         AlertDialog(
             onDismissRequest = { backupToActOn = null },
             title = { Text(backup.name) },
-            text = { Text("Восстановить данные из этого бекапа или удалить его?") },
+            text = { Text("Восстановить данные из этого бекапа, сохранить его на телефон или удалить?") },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.restoreBackup(backup.file)
@@ -157,6 +219,14 @@ fun BackupsScreen(
             },
             dismissButton = {
                 Row {
+                    TextButton(onClick = {
+                        backupToSaveToPhone = backup
+                        backupToActOn = null
+                        saveToPhoneLauncher.launch(backup.file.name)
+                    }) {
+                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text(" На телефон")
+                    }
                     TextButton(onClick = {
                         viewModel.deleteBackup(backup.file)
                         backupToActOn = null
@@ -167,6 +237,17 @@ fun BackupsScreen(
                     }
                     TextButton(onClick = { backupToActOn = null }) { Text("Отмена") }
                 }
+            }
+        )
+    }
+
+    resultMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { resultMessage = null },
+            title = { Text("Бекапы") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { resultMessage = null }) { Text("Ок") }
             }
         )
     }

@@ -71,13 +71,6 @@ private fun shiftTypeLabel(type: ShiftType): String = when (type) {
     ShiftType.WEEKEND -> "Выходной день"
 }
 
-/**
- * ДОБАВЛЕНО (ТЗ: «справочники должны быть напрямую связаны со всем проектом,
- * то есть менять цвет при выборе другого типа смены»): цвет теперь берётся из
- * справочника «Типы времени» (см. `shiftTypeTimeTypeId`) — тот же цвет, что
- * потом используется в журнале записей. Если пользователь поменяет цвет в
- * справочнике, здесь он тоже сразу поменяется.
- */
 private fun colorForShiftType(type: ShiftType, timeTypes: List<TimeType>): Color {
     val timeType = timeTypes.find { it.id == shiftTypeTimeTypeId(type) }
     if (timeType != null && timeType.color.isNotBlank()) {
@@ -96,26 +89,18 @@ private fun colorForShiftType(type: ShiftType, timeTypes: List<TimeType>): Color
     }
 }
 
-// ИСПРАВЛЕНО: теперь общий moneyInputFilter из com.example.timesheet.data — одинаковая логика во всех диалогах.
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShiftEntryDialog(
     employees: List<Employee>,
     organizations: List<Organization>,
     surcharges: List<Surcharge>,
-    // ДОБАВЛЕНО (ТЗ: связь со справочниками): нужен для цвета типа смены.
     timeTypes: List<TimeType> = emptyList(),
     preselectedEmployeeId: String?,
     preselectedOrganizationId: String?,
     initialEntry: LedgerEntry? = null,
     initialDate: LocalDate = LocalDate.now(),
     projectSuggestions: List<String> = emptyList(),
-    // ДОБАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): весь
-    // текущий журнал нужен, чтобы по-настоящему предупредить пользователя,
-    // если новая смена пересекается по времени с уже существующей сменой
-    // этого же сотрудника в этот же день — раньше ничего не предупреждало,
-    // и записи молча накладывались друг на друга.
     existingEntries: List<LedgerEntry> = emptyList(),
     onClose: () -> Unit,
     onConfirm: (LedgerEntry) -> Unit,
@@ -123,32 +108,11 @@ fun ShiftEntryDialog(
 ) {
     var activeTab by remember { mutableStateOf(0) }
 
-    // ИСПРАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): id
-    // записи раньше генерировался ЗАНОВО при каждом вызове buildDraftEntry()
-    // (`id = initialEntry?.id ?: UUID.randomUUID().toString()` внутри функции,
-    // а не в remember) — а buildDraftEntry() вызывается на каждой
-    // рекомпозиции для расчёта суммы в шапке. У одного и того же открытого
-    // диалога добавления смены на каждой перерисовке получался НОВЫЙ
-    // случайный id. Теперь id одной открытой формы стабилен на всё время её
-    // жизни — один диалог добавления всегда сохраняет ровно одну (или, при
-    // выборе диапазона дат, N сгенерированных заранее) запись, а не рискует
-    // расползтись на несколько разных id из-за случайной рекомпозиции.
     val stableEntryId = remember { initialEntry?.id ?: java.util.UUID.randomUUID().toString() }
 
-    // ДОБАВЛЕНО (ТЗ: «чтобы человек мог добавить в смены... промежуток дат»):
-    // диапазон дат доступен только при ДОБАВЛЕНИИ новой смены — у уже
-    // существующей записи один-единственный день, его меняют через обычный
-    // выбор одной даты. Признак режима редактирования — переданный onDelete
-    // (а не initialEntry == null: экран добавления передаёт сюда «болванку»
-    // LedgerEntry() с предвыбранными доплатами из шаблона, так что сам по
-    // себе initialEntry не отличает добавление от редактирования).
     val isAddMode = onDelete == null
     var rangeEnabled by remember { mutableStateOf(false) }
 
-    // ДОБАВЛЕНО: защита от повторного нажатия «Сохранить» (двойной тап) —
-    // именно она и была одной из причин появления «накладывающихся друг на
-    // друга» дублей: ничего не мешало вызвать onConfirm дважды до того, как
-    // диалог успевал закрыться.
     var isSaving by remember { mutableStateOf(false) }
 
     var date by remember {
@@ -165,10 +129,6 @@ fun ShiftEntryDialog(
         mutableStateOf(initialEntry?.endTime ?: LocalTime.of(17, 0))
     }
 
-    // ИСПРАВЛЕНО (ТЗ: «единая связь со всеми вкладками» / «удаление и добавление
-    // типа в справочнике должно отражаться в смене»): раньше здесь был отдельный
-    // enum ShiftType, никак не связанный со справочником. Теперь источник
-    // правды — сам справочник timeTypes: храним id выбранной записи.
     var timeTypeId by remember {
         mutableStateOf(
             initialEntry?.timeTypeId
@@ -314,11 +274,6 @@ fun ShiftEntryDialog(
             timeTypes
         )
 
-    // ДОБАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): настоящая
-    // проверка — пересекается ли эта смена по времени с уже существующей
-    // сменой ТОГО ЖЕ сотрудника в ТОТ ЖЕ день. Раньше пользователь никак не
-    // узнавал об этом, пока не открывал журнал и не видел два наложившихся
-    // друг на друга блока. Проверяем каждый день диапазона, если он включён.
     val overlapDates: List<LocalDate> = run {
         val daysToCheck = if (rangeEnabled && isAddMode) dateRangeDays(date, rangeEndDate) else listOf(date)
         daysToCheck.filter { checkedDate ->
@@ -374,11 +329,6 @@ fun ShiftEntryDialog(
                         IconButton(
                             enabled = !isSaving,
                             onClick = {
-                                // ИСПРАВЛЕНО (ТЗ: «сохранения стали накладываться друг на
-                                // друга»): защита от двойного тапа + при включённом
-                                // диапазоне дат создаём отдельную запись (со своим
-                                // сгенерированным id) на каждый день диапазона, а не
-                                // молча теряем/дублируем одну и ту же.
                                 if (isSaving) return@IconButton
                                 isSaving = true
                                 if (rangeEnabled && isAddMode) {
@@ -438,14 +388,6 @@ fun ShiftEntryDialog(
 
         if (activeTab == 0) {
 
-            // ИСПРАВЛЕНО (ТЗ: «нет возможности листать вниз» / «не работает кнопка
-            // добавления на несколько дней»): раньше это был Column(fillMaxSize())
-            // БЕЗ прокрутки — как только контента стало больше (после добавления
-            // блока диапазона дат и предупреждения о пересечении), всё, что не
-            // помещалось на экран (включая сам переключатель диапазона дат и всё,
-            // что ниже — доплаты, комментарий, кнопку удаления), было физически
-            // не видно и недостижимо. Кнопка "не работала" не потому что была
-            // сломана логика, а потому что до неё нельзя было докрутить.
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -564,8 +506,6 @@ fun ShiftEntryDialog(
                         modifier = Modifier.fillMaxWidth(),
 
                         leadingIcon = {
-                            // ИСПРАВЛЕНО (ТЗ: цвет должен меняться при выборе другого типа
-                            // смены — теперь берётся напрямую из выбранной записи справочника).
                             val dotColor = selectedTimeType?.color?.let {
                                 runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull()
                             } ?: Color.LightGray
@@ -596,15 +536,6 @@ fun ShiftEntryDialog(
                             shiftTypeMenuOpen = false
                         }
                     ) {
-                        // ИСПРАВЛЕНО (ТЗ: «сделать нормальную единую связь со всеми
-                        // вкладками, у меня же есть база данных» / «почему я могу
-                        // удалить из справочника дневную смену, а в самой смене она
-                        // останется» / «почему когда я добавляю сверхурочную смену она
-                        // всё равно отображается как дневная»): раньше список был
-                        // жёстко зашит (`ShiftType.values()`) и никак не зависел от
-                        // справочника. Теперь список — это сам справочник `timeTypes`:
-                        // что удалено в справочнике, пропадает и здесь; что добавлено —
-                        // сразу становится доступным для выбора.
                         if (timeTypes.isEmpty()) {
                             DropdownMenuItem(
                                 text = { Text("Справочник «Типы времени» пуст") },

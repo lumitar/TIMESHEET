@@ -35,12 +35,6 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
-/**
- * ИСПРАВЛЕНО: теперь используется общий com.example.timesheet.data.moneyInputFilter
- * вместо локальной копии — одна и та же логика во всех диалогах проекта, а не
- * несколько похожих копий, которые могли незаметно разойтись.
- */
-
 @Composable
 fun AddEntryDialog(
     title: String,
@@ -82,7 +76,6 @@ fun AddEntryDialog(
     var expenseCategoryMenuOpen by remember { mutableStateOf(false) }
     var unitMenuOpen by remember { mutableStateOf(false) }
 
-    // ДОБАВЛЕНО (ТЗ: «сделать нормальный календарь и время тоже»)
     var showDatePicker by remember { mutableStateOf(false) }
     var showStartTimePicker by remember { mutableStateOf(false) }
     var showEndTimePicker by remember { mutableStateOf(false) }

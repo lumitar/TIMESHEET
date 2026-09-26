@@ -160,13 +160,6 @@ fun TimeTypeItem(
                     )
                 }
             }
-            // ДОБАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике
-            // отображались визуально и тоже на что-то влияли»): множитель
-            // оплаты раньше нигде не был виден в самом справочнике — было
-            // непонятно, что тип вообще на что-то влияет и на сколько именно.
-            // Теперь он показан прямо в списке рядом с кнопками редактирования,
-            // тем же цветом, что и метка типа — это то самое число, которое
-            // PayrollCalculator.shiftMultiplier() берёт напрямую из этой записи.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     color = Color(android.graphics.Color.parseColor(
@@ -205,13 +198,6 @@ fun TimeTypeEditDialog(
     var name by remember(initial) { mutableStateOf(initial.name) }
     var code by remember(initial) { mutableStateOf(initial.code) }
     var selectedColor by remember(initial) { mutableStateOf(initial.color) }
-    // ДОБАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике
-    // отображались визуально и тоже на что-то влияли»): раньше у этого диалога
-    // вообще не было поля для payMultiplier — само значение в модели уже было
-    // (см. Models.kt), но пользователь никак не мог его задать для СВОЕГО типа,
-    // так что "на что-то влияли" не выполнялось для новых типов. Текстом, а не
-    // слайдером — множитель редко бывает "круглым" (1.4, 1.5, 2.0...), и
-    // человеку проще ввести точное число, чем попасть в него ползунком.
     var multiplierText by remember(initial) { mutableStateOf(formatMultiplier(initial.payMultiplier)) }
 
     val colors = listOf(
@@ -635,10 +621,6 @@ fun TaxEditDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = rateText,
-                    // ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»):
-                    // раньше здесь можно было ввести любые символы, включая буквы —
-                    // единственная защита была неявная (toDoubleOrNull() ?: 0.0 при
-                    // сохранении), из-за чего в самом поле буквы всё равно печатались.
                     onValueChange = { rateText = moneyInputFilter(it) },
                     label = { Text("Ставка, %") },
                     singleLine = true,

@@ -1,14 +1,5 @@
 package com.example.timesheet.ui
 
-// ДОБАВЛЕНО (ТЗ: «доделать вкладки как на макетах», «кнопка доход должна быть
-// рабочей и отображаться так как я прикрепила», «кнопка предв.просмотр должна
-// тоже быть рабочей»): раньше клик по плашке «Доход» открывал простой
-// AlertDialog (IncomeBreakdownDialog) без вкладок и без рабочего предпросмотра.
-// Этот экран воспроизводит макет: шеврон-сворачивание сверху, вкладки
-// «Расчетный лист» / «Табель», и на каждой вкладке рабочие кнопки
-// «ПРЕДВ. ПРОСМОТР» (открывает настоящий PDF через ACTION_VIEW) и
-// «ОТПРАВИТЬ» (шарит xls/pdf, как и раньше в отчётах).
-
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -74,17 +65,6 @@ import java.util.Locale
 private val IncomeGreen = Color(0xFF5CA02F)
 private val IncomeAccent = Color(0xFFFF5722)
 
-// ИСПРАВЛЕНО (ТЗ: «почему когда я добавляю сверхурочную смену она всё равно
-// отображается как дневная»): раньше вкладка «Доход» определяла название и
-// цвет смены не по выбранному в справочнике типу (`entry.timeTypeId`), а
-// заново «угадывала» их по старому пятизначному enum `ShiftType` через
-// жёстко зашитые списки `shiftTypeShortName`/`shiftTypeSummaryLabel`. Любой
-// тип, не попавший в эти 5 вариантов (а также любой пользовательский тип из
-// справочника), молча схлопывался в «Дневная смена». Теперь, как и в журнале
-// смен (`JournalEntryItem.kt`), название и цвет берутся напрямую из
-// справочника `timeTypes` по `entry.timeTypeId` — единый источник правды.
-// Резервный вариант по `shiftType` остаётся только для самых старых записей,
-// у которых `timeTypeId` ещё не был проставлен.
 private fun resolvedTimeType(entry: LedgerEntry, timeTypes: List<TimeType>): TimeType? =
     timeTypes.find { it.id == entry.timeTypeId }
         ?: timeTypes.find { it.id == shiftTypeTimeTypeId(entry.shiftType) }
@@ -98,10 +78,6 @@ private fun shiftTypeSummaryLabel(type: ShiftType): String = when (type) {
 }
 
 private fun shiftLabelFor(entry: LedgerEntry, timeTypes: List<TimeType>): String =
-    // ИСПРАВЛЕНО (ТЗ: «почему когда я добавляю сверхурочную смену она всё равно
-    // отображается как дневная»): «сверхурочная» — это галочка `overtimeEnabled`
-    // в диалоге «Смена», а не отдельный тип из справочника. Раньше она нигде не
-    // отображалась и здесь тоже — теперь label явно её показывает.
     displayShiftLabel(
         resolvedTimeType(entry, timeTypes)?.name ?: shiftTypeSummaryLabel(entry.shiftType),
         entry.overtimeEnabled
@@ -178,12 +154,6 @@ fun IncomeReportScreen(
         breakdown.entries.filter { it.type == EntryType.SHIFT && YearMonth.from(it.date) == month }
     }
 
-    // ИСПРАВЛЕНО (ТЗ: «сделать кнопку выхода из вкладки доход»): раньше выйти
-    // можно было только тапом по маленькому шеврону-«сворачиванию» без подписи
-    // (легко не заметить, а системная кнопка/жест «назад» экран вообще не
-    // закрывали, потому что BackHandler не был подключён). Теперь есть явная
-    // подписанная кнопка «Закрыть» (крестик) и системная кнопка «назад» тоже
-    // закрывает вкладку.
     BackHandler(onBack = onDismiss)
 
     Scaffold(
@@ -282,8 +252,6 @@ private fun PayslipTabContent(
             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = balanceText,
-                    // ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»):
-                    // остаток может быть отрицательным — разрешаем ведущий минус.
                     onValueChange = { balanceText = moneySignedInputFilter(it) },
                     label = { Text("Остаток на начало") },
                     singleLine = true,
@@ -414,9 +382,6 @@ private fun TimesheetTabContent(
             val totalDays = shiftEntries.map { it.date }.distinct().size
             SummaryRow("Смены", formatHours(totalPaidHours), "$totalDays д.")
 
-            // ИСПРАВЛЕНО: группировка теперь по реальному типу из справочника
-            // (timeTypeId), а не по старому пятизначному enum — иначе, например,
-            // все нестандартные/пользовательские типы схлопывались в одну строку.
             shiftEntries.groupBy {
                 val baseKey = resolvedTimeType(it, timeTypes)?.id ?: it.timeTypeId ?: it.shiftType.name
                 // Сверхурочные группируем отдельно от обычных смен того же типа —

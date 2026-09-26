@@ -3,10 +3,6 @@ package com.example.timesheet.data
 import java.time.LocalDate
 import java.time.YearMonth
 
-/**
- * ПЕРЕНЕСЕНО из ui/PeriodSettingsScreen.kt в data-слой (ТЗ: единая цепочка
- * «Настроить период» -> применяется и в Журнале смен, и в отчётах, и хранится в ViewModel).
- */
 data class QuickPeriod(
     val id: String,
     val name: String,

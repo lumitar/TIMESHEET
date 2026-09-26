@@ -57,9 +57,6 @@ fun JournalEntryItem(
     employeeName: String?,
     organizationName: String?,
     timeTypes: List<TimeType> = emptyList(),
-    // ДОБАВЛЕНО (ТЗ: справочники должны быть связаны со всем проектом): чтобы в
-    // журнале показывались настоящие названия категории расхода и единицы
-    // измерения, а не их внутренние id.
     expenseCategories: List<ExpenseCategory> = emptyList(),
     units: List<UnitOfMeasure> = emptyList(),
     onEdit: (LedgerEntry) -> Unit = {},
@@ -98,13 +95,7 @@ fun JournalEntryItem(
         }
     }
 
-    /**
-     * ИСПРАВЛЕНО (ТЗ: «единая связь со всеми вкладками» — цвет и название типа
-     * смены теперь берутся напрямую из справочника по `entry.timeTypeId` (тому
-     * же id, что выбирается в диалоге «Смена»), а не по старому фиксированному
-     * enum. Для старых записей без `timeTypeId` (созданных до этого исправления)
-     * остаётся резервный поиск по `shiftTypeTimeTypeId`.
-     */
+    
     val selectedTimeType = if (entry.type == EntryType.SHIFT) {
         timeTypes.find { it.id == entry.timeTypeId }
             ?: timeTypes.find { it.id == shiftTypeTimeTypeId(entry.shiftType) }
@@ -115,9 +106,6 @@ fun JournalEntryItem(
     fun getShiftColor(): Color {
         if (entry.type != EntryType.SHIFT) return Color.Transparent
 
-        // ИСПРАВЛЕНО: включённая «Оплата сверхурочных часов» теперь заметна и по
-        // цвету полосы слева — фиолетовый (цвет ShiftType.OVERTIME), даже если
-        // выбранный тип из справочника — «Дневная смена».
         if (entry.overtimeEnabled) return Color(0xFF9C27B0)
 
         if (selectedTimeType != null && selectedTimeType.color.isNotBlank()) {
@@ -400,9 +388,6 @@ fun JournalEntryItem(
                             fontSize = 14.sp,
                             color = Color.DarkGray
                         )
-                        // ДОБАВЛЕНО (ТЗ: справочники/вкладки должны быть связаны с проектом):
-                        // тип доплаты/удержания и проект, выбранные в диалоге, раньше нигде
-                        // не отображались в журнале — теперь видны сразу в списке.
                         if (entry.adjustmentTypeName.isNotBlank()) {
                             Text(
                                 text = entry.adjustmentTypeName,
@@ -461,9 +446,6 @@ fun JournalEntryItem(
                             fontSize = 14.sp,
                             color = Color.DarkGray
                         )
-                        // ИСПРАВЛЕНО (ТЗ: справочники должны быть связаны с проектом):
-                        // раньше здесь показывался внутренний id категории/единицы, а не
-                        // название из справочника — теперь резолвим настоящее имя.
                         if (!categoryName.isNullOrBlank()) {
                             Text(
                                 text = "Категория: $categoryName",

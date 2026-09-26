@@ -103,9 +103,6 @@ fun IncomeBreakdownDialog(
                 if (editingBalance) {
                     OutlinedTextField(
                         value = balanceText,
-                        // ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»):
-                        // остаток может быть отрицательным, поэтому разрешаем один минус
-                        // в начале строки плюс цифры и разделитель дробной части.
                         onValueChange = { balanceText = moneySignedInputFilter(it) },
                         label = { Text("Остаток на начало") },
                         singleLine = true,

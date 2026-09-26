@@ -43,10 +43,7 @@ object PayrollCalculator {
         )
     }
 
-    /**
-     * ДОБАВЛЕНО (ТЗ): расчёт за произвольный период — используется в «Настроить период»,
-     * «Журнал смен» и во всех трёх отчётах, а не только за календарный месяц.
-     */
+    
     fun calculateForPeriod(
         entries: List<LedgerEntry>,
         employees: List<Employee>,
@@ -103,20 +100,7 @@ object PayrollCalculator {
         )
     }
 
-    /**
-     * ИСПРАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике
-     * отображались визуально и тоже на что-то влияли»): множитель оплаты
-     * теперь берётся НАПРЯМУЮ из записи справочника «Типы времени»
-     * (`TimeType.payMultiplier`) по `entry.timeTypeId` — это работает
-     * одинаково что для встроенных, что для любых собственных типов,
-     * придуманных пользователем, а не только для 5 зашитых названий.
-     * Угадывание по названию (`inferShiftTypeFromTimeType` → `ShiftType`)
-     * остаётся только запасным вариантом — для старых записей, у которых
-     * `timeTypeId` пуст или не найден в текущем справочнике (например, тип
-     * был удалён). Если включена «Оплата сверхурочных часов»
-     * (LedgerEntry.overtimeEnabled), множитель не может быть ниже 1.5 — это
-     * ставка сверхурочных, независимо от типа смены.
-     */
+    
     fun shiftMultiplier(entry: LedgerEntry, timeTypes: List<TimeType> = emptyList()): Double {
         val timeType = timeTypes.find { it.id == entry.timeTypeId }
         val base = if (timeType != null) {
